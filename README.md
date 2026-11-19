@@ -9,6 +9,39 @@ Server-side / host-side GSC lobby administration menu framework for self-hosted 
 
 > **Targets:** `t6/zm` and `t4` targets are not implemented yet. A new target only needs an entry file with the game hooks (see [Adding a game](#adding-a-game)).
 
+## Quickstart
+
+> **Important:** Do **not** copy files from `src/` directly into Plutonium. The files in `src/<game>/mp/` are incomplete entry stubs without `src/common/menu_core.gsc` and will fail with `Unresolved external : "mmcoreinit"` / `"mmgiveweapon"` errors. Always run the build script first and install the assembled file from `build/`.
+
+### 1. Clone, build, and install
+
+**Windows (PowerShell):**
+
+```powershell
+git clone https://github.com/DancinGhost/gsc-lobby-menu.git
+cd gsc-lobby-menu
+.\scripts\build.ps1 -InstallToPlutonium
+```
+
+*(Pass `-Game t6` or `-Game iw5` to install only one game.)*
+
+**Linux / macOS:**
+
+```bash
+git clone https://github.com/DancinGhost/gsc-lobby-menu.git
+cd gsc-lobby-menu
+./scripts/build.sh --install
+```
+
+*(Pass `--storage "/path/to/Plutonium/storage"` if Plutonium is not in your default Wine prefix.)*
+
+### 2. Launch and open the menu
+
+1. Start a private match or custom server in Plutonium (or run `map_restart` in the `~` console if already in a match).
+2. Once spawned, press **`ADS` + `Melee`** to open the menu. Use **D-Pad** to navigate/adjust, **`Use`** to select, and **`Melee`** to go back/close.
+
+The match host gets `Host` access automatically. On dedicated servers, preset `mm_admins` in your server config (see [Server configuration](#server-configuration)).
+
 ## Features
 
 - **Scrolling HUD menu**: rows are allocated once and only their text changes. Distinct strings are counted and freed before the configstring limit is reached ("overflow fix").
@@ -79,10 +112,10 @@ T6 compiles standalone without external include files. For IW5, `--compile` runs
 
 ### Manual install
 
-Copy the built script to:
+After running `.\scripts\build.ps1` or `./scripts/build.sh`, copy the assembled script from `build/` (not `src/`):
 
-- **Black Ops II (`t6`)**: `%LOCALAPPDATA%\Plutonium\storage\t6\scripts\mp\`
-- **Modern Warfare 3 (`iw5`)**: `%LOCALAPPDATA%\Plutonium\storage\iw5\scripts\mp\`
+- **Black Ops II (`t6`)**: `build/t6/mp/lobbymenu_t6_mp.gsc` → `%LOCALAPPDATA%\Plutonium\storage\t6\scripts\mp\`
+- **Modern Warfare 3 (`iw5`)**: `build/iw5/mp/lobbymenu_iw5_mp.gsc` → `%LOCALAPPDATA%\Plutonium\storage\iw5\scripts\mp\`
 
 In-game, run `map_restart` in the console (`~`) to reload scripts.
 
