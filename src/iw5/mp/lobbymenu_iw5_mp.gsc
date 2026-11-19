@@ -145,6 +145,11 @@ game_addWeaponOptions(menuId)
     self mmAddOption(menuId, "Give Desert Eagle", ::mmGiveWeapon, "iw5_deserteagle_mp");
 }
 
+game_getWeaponsList()
+{
+    return self getWeaponsListAll();
+}
+
 game_spawnBot()
 {
     bot = addTestClient();
@@ -172,16 +177,23 @@ iw5BotJoin()
     while (!isDefined(self.pers) || !isDefined(self.pers["team"]))
         wait 0.05;
 
-    self notify("menuresponse", game["menu_team"], "autoassign");
+    if (isDefined(game["menu_team"]))
+        self notify("menuresponse", game["menu_team"], "autoassign");
     wait 0.5;
 
     if (!isDefined(level.classmap))
         return;
 
+    if (isDefined(level.classmap["class0"]))
+    {
+        self notify("menuresponse", "changeclass", "class0");
+        return;
+    }
+
     classes = getArrayKeys(level.classmap);
     for (i = 0; i < classes.size; i++)
     {
-        if (!isSubStr(classes[i], "custom"))
+        if (isSubStr(classes[i], "class") && !isSubStr(classes[i], "custom"))
         {
             self notify("menuresponse", "changeclass", classes[i]);
             return;

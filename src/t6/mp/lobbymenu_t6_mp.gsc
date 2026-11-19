@@ -129,10 +129,26 @@ game_addWeaponOptions(menuId)
     self mmAddOption(menuId, "Give SCAR-H", ::mmGiveWeapon, "scar_mp");
 }
 
+// T6 uses getWeaponsList(); IW5's getWeaponsListAll() does not exist on T6.
+game_getWeaponsList()
+{
+    return self getWeaponsList();
+}
+
 // The stock bot helper also picks a team and class and runs the bot AI.
+// Normalize its return value to a strict bool (stock spawn_bot may return a
+// bot entity, a bool/int, or undefined).
 game_spawnBot()
 {
-    return maps\mp\bots\_bot::spawn_bot("autoassign");
+    before = level.players.size;
+    res = maps\mp\bots\_bot::spawn_bot("autoassign");
+    if (level.players.size > before)
+        return true;
+    if (!isDefined(res))
+        return false;
+    if (isPlayer(res))
+        return true;
+    return (res != 0);
 }
 
 // T6: setWaypoint(constantSize, offscreenMaterial). The offscreen material

@@ -54,6 +54,7 @@ cd gsc-lobby-menu
 - **Access tiers**: `Host`/`Owner`, `Admin`, `VIP`, `None`. You can only manage players below your own level, and only grant levels below your own.
 - **Persistent access**: grants are saved by GUID in the `mm_admins` dvar, so they survive fast restarts and map changes. They can also be preset in the server config.
 - **Self options**: God Mode, Infinite Ammo, UFO / Noclip, Speed Boost (adjustable multiplier), Third Person, Suicide.
+- **Combat options**: Aimbot (adjustable target bone, FOV cone, Aim Without ADS, Aim Through Walls), Wallhack / ESP.
 - **Weapon loadouts**: game-specific weapons, Refill All Ammo, Take All Weapons.
 - **Lobby settings (Admin+)**: Super Jump, adjustable Gravity, Spawn Bot, Kick All Bots, Fast Restart. Changed dvars are backed up and restored at game end and on the next map load.
 - **Player manager (Admin+)**: set or revoke access, freeze, kill, kick, teleport to, bring to you.
@@ -153,7 +154,9 @@ Create `src/<game>/<mode>/lobbymenu_<game>_<mode>.gsc` with the game's `#include
 | `game_setThirdPerson(enabled)` | Game-specific third-person switch |
 | `game_setSuperJump(enabled)` | Game-specific lobby super jump toggle |
 | `game_addWeaponOptions(menuId)` | Adds weapon entries with `mmAddOption()` |
+| `game_getWeaponsList()` | Returns an array of all weapons held by `self` |
 | `game_spawnBot()` | Adds a bot that joins a team; returns `true` on success |
+| `game_setupEspWaypoint()` | Configures `self` (a client HUD element) as a 3D world waypoint |
 
 Then add the target to the build scripts and the CI workflow.
 

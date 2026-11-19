@@ -12,6 +12,7 @@
  *   game_setThirdPerson(enabled)
  *   game_setSuperJump(enabled)      game-specific lobby super jump toggle
  *   game_addWeaponOptions(menuId)   adds weapon entries via mmAddOption()
+ *   game_getWeaponsList()           returns array of all weapons held by self
  *   game_spawnBot()                 returns true if a bot was added
  *   game_setupEspWaypoint()         turns self (a client hud elem) into a world
  *                                   waypoint (setWaypoint args differ per game)
@@ -176,10 +177,14 @@ mmInitPlayer()
     self.menu["values"]["aimfov"] = 90;
     self.menu["values"]["aimbone"] = 0;
 
-    // ESP markers keyed by the enemy's entity number.
+    // ESP markers keyed by the enemy's entity number (as a string).
     self.menu["esp"] = [];
 
-    self.menu["guid"] = "" + self getGuid();
+    guid = self getGuid();
+    if (isDefined(guid))
+        self.menu["guid"] = "" + guid;
+    else
+        self.menu["guid"] = "";
 
     if (self isHost())
         self.menu["access"] = 3;
@@ -201,6 +206,12 @@ mmOnPlayerSpawned()
             self.menu["welcomed"] = true;
             self mmPrintWelcome();
         }
+
+        // Wait until stock spawned_player listeners finish so health/speed/view
+        // settings aren't immediately overwritten on the spawn frame.
+        waittillframeend;
+        if (!isAlive(self))
+            continue;
 
         self mmReapplyToggles();
 
@@ -299,7 +310,7 @@ mmInputLoop()
             continue;
         }
 
-        if (!isAlive(self) || self.menu["frozen"] || (isDefined(self.sessionstate) && self.sessionstate != "playing"))
+        if (!isAlive(self) || self.menu["frozen"] || self.menu["access"] <= 0 || (isDefined(self.sessionstate) && self.sessionstate != "playing"))
         {
             self mmCloseMenu();
             continue;
@@ -988,6 +999,8 @@ mmSetText(elem, text)
 
 mmFlushStrings()
 {
+    level endon("game_ended");
+
     level.menuStringFlushing = true;
     waittillframeend;
 
@@ -1126,12 +1139,32 @@ mmInfiniteAmmoLoop()
 
 mmSpeedOn()
 {
+    self notify("mm_stop_speed");
     self setMoveSpeedScale(self.menu["values"]["speed"]);
+    self thread mmSpeedWatchWeaponChange();
 }
 
 mmSpeedOff()
 {
+    self notify("mm_stop_speed");
     self setMoveSpeedScale(1.0);
+}
+
+// Stock weapon scripts recalculate moveSpeedScale on weapon_change; reapply
+// our boost after they finish so switching weapons doesn't silently clear it.
+mmSpeedWatchWeaponChange()
+{
+    self endon("disconnect");
+    self endon("mm_stop_speed");
+    level endon("game_ended");
+
+    for (;;)
+    {
+        self waittill("weapon_change");
+        waittillframeend;
+        if (isAlive(self) && self.menu["toggles"]["speed"])
+            self setMoveSpeedScale(self.menu["values"]["speed"]);
+    }
 }
 
 mmApplySpeedValue(value)
@@ -1174,6 +1207,9 @@ mmUfoLoop()
     self endon("mm_stop_ufo");
     level endon("game_ended");
 
+    if (isDefined(self.ufoOrigin))
+        self.ufoOrigin delete();
+
     self.ufoOrigin = spawn("script_origin", self.origin);
     self playerLinkTo(self.ufoOrigin);
     self mmBlockWeapons("ufo", true);
@@ -1183,7 +1219,7 @@ mmUfoLoop()
     {
         wait 0.05;
 
-        if (self.menu["isOpen"] || self.menu["frozen"])
+        if (!isAlive(self) || self.menu["isOpen"] || self.menu["frozen"] || (isDefined(self.sessionstate) && self.sessionstate != "playing"))
             continue;
 
         speed = self.menu["values"]["ufospeed"];
@@ -1267,7 +1303,7 @@ mmAimbotLoop()
     {
         wait 0.05;
 
-        if (!isAlive(self) || self.menu["isOpen"] || self.menu["toggles"]["ufo"] || self.menu["frozen"])
+        if (!isAlive(self) || self.menu["isOpen"] || self.menu["toggles"]["ufo"] || self.menu["frozen"] || (isDefined(self.sessionstate) && self.sessionstate != "playing"))
             continue;
         if (!self.menu["toggles"]["aim_noads"] && !self adsButtonPressed())
             continue;
@@ -1391,6 +1427,7 @@ mmEspLoop()
             limit = maxMarkers;
 
         active = [];
+        positions = [];
         for (i = 0; i < limit; i++)
         {
             p = enemies[i];
@@ -1398,7 +1435,26 @@ mmEspLoop()
             if (!isDefined(head))
                 continue;
 
-            key = p getEntityNumber();
+            key = "" + p getEntityNumber();
+            active[key] = true;
+            positions[key] = head + (0, 0, 14);
+        }
+
+        // Destroy stale markers first so swapping enemies never spikes HUD elem count.
+        keys = getArrayKeys(self.menu["esp"]);
+        for (i = 0; i < keys.size; i++)
+        {
+            if (isDefined(active[keys[i]]))
+                continue;
+            if (isDefined(self.menu["esp"][keys[i]]))
+                self.menu["esp"][keys[i]] destroy();
+            self.menu["esp"][keys[i]] = undefined;
+        }
+
+        activeKeys = getArrayKeys(active);
+        for (i = 0; i < activeKeys.size; i++)
+        {
+            key = activeKeys[i];
             marker = self.menu["esp"][key];
             if (!isDefined(marker))
             {
@@ -1408,21 +1464,10 @@ mmEspLoop()
                 self.menu["esp"][key] = marker;
             }
 
-            active[key] = true;
-            pos = head + (0, 0, 14);
+            pos = positions[key];
             marker.x = pos[0];
             marker.y = pos[1];
             marker.z = pos[2];
-        }
-
-        keys = getArrayKeys(self.menu["esp"]);
-        for (i = 0; i < keys.size; i++)
-        {
-            if (isDefined(active[keys[i]]))
-                continue;
-            if (isDefined(self.menu["esp"][keys[i]]))
-                self.menu["esp"][keys[i]] destroy();
-            self.menu["esp"][keys[i]] = undefined;
         }
 
         wait 0.05;
@@ -1476,13 +1521,19 @@ mmGiveWeapon(weaponName)
 
 mmRefillAmmo()
 {
-    weapons = self getWeaponsListAll();
-    for (i = 0; i < weapons.size; i++)
+    weapons = self game_getWeaponsList();
+    if (isDefined(weapons))
     {
-        clip = weaponClipSize(weapons[i]);
-        if (clip > 0)
-            self setWeaponAmmoClip(weapons[i], clip);
-        self giveMaxAmmo(weapons[i]);
+        for (i = 0; i < weapons.size; i++)
+        {
+            weapon = weapons[i];
+            if (!isDefined(weapon) || weapon == "" || weapon == "none")
+                continue;
+            clip = weaponClipSize(weapon);
+            if (clip > 0)
+                self setWeaponAmmoClip(weapon, clip);
+            self giveMaxAmmo(weapon);
+        }
     }
     self iprintln("All weapon ammo refilled.");
 }
@@ -1516,7 +1567,12 @@ mmRestoreDvar(dvar)
         return;
 
     if (orig.size >= 2 && getSubStr(orig, 0, 2) == "v:")
-        orig = getSubStr(orig, 2);
+    {
+        if (orig.size > 2)
+            orig = getSubStr(orig, 2, orig.size);
+        else
+            orig = "";
+    }
 
     setDvar(dvar, orig);
     setDvar(backup, "");
@@ -1528,6 +1584,16 @@ mmRestoreAllDvars()
         mmRestoreDvar(level.menuTrackedDvars[i]);
 }
 
+mmBroadcast(msg)
+{
+    players = level.players;
+    for (i = 0; i < players.size; i++)
+    {
+        if (isDefined(players[i]))
+            players[i] iprintln(msg);
+    }
+}
+
 mmToggleSuperJump()
 {
     state = !level.menuServerToggles["superjump"];
@@ -1535,7 +1601,7 @@ mmToggleSuperJump()
 
     game_setSuperJump(state);
 
-    iprintln("Super Jump: " + mmOnOff(state));
+    mmBroadcast("Super Jump: " + mmOnOff(state));
 }
 
 mmApplyGravity(value)
@@ -1548,7 +1614,8 @@ mmApplyGravity(value)
 
 mmSpawnBot()
 {
-    if (self game_spawnBot())
+    ok = self game_spawnBot();
+    if (isDefined(ok) && ok)
         self iprintln("Spawned a bot.");
     else
         self iprintln("^1Failed to spawn bot (lobby may be full).");
@@ -1566,8 +1633,10 @@ mmKickAllBots()
     for (i = 0; i < players.size; i++)
     {
         p = players[i];
-        if (isDefined(p) && p mmIsBot())
+        if (isDefined(p) && p mmIsBot() && (!isDefined(p.menu) || !isDefined(p.menu["kicked"])))
         {
+            if (isDefined(p.menu))
+                p.menu["kicked"] = true;
             kick(p getEntityNumber());
             kicked++;
         }
@@ -1674,6 +1743,9 @@ mmApplyAccess(newLevel)
 
 mmLoadSavedAccess()
 {
+    if (self mmIsBot())
+        return 0;
+
     guid = self.menu["guid"];
     if (guid == "" || guid == "0")
         return 0;
