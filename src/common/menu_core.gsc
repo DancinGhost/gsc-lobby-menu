@@ -8,9 +8,13 @@
  * Game hooks every entry file must define:
  *   game_onPlayerConnect()          per-player setup at connect (command binds, ...)
  *   game_readDirection()            "up" / "down" / "left" / "right" or undefined
+ *   game_setGodMode(enabled)        game-specific invulnerability toggle on self
  *   game_setThirdPerson(enabled)
+ *   game_setSuperJump(enabled)      game-specific lobby super jump toggle
  *   game_addWeaponOptions(menuId)   adds weapon entries via mmAddOption()
  *   game_spawnBot()                 returns true if a bot was added
+ *   game_setupEspWaypoint()         turns self (a client hud elem) into a world
+ *                                   waypoint (setWaypoint args differ per game)
  *
  * Level config the entry file sets in init() before calling mmCoreInit():
  *   level.menuTitle
@@ -18,6 +22,8 @@
  *                                   buttons (polled), false if it reports
  *                                   one-shot press events
  *   level.menuGravityDvar           world gravity dvar for this game
+ *   level.menuExtraTrackedDvars     (optional) array of extra game-specific dvars
+ *                                   to back up and restore (e.g. jump_height)
  *
  * Access levels: 0 = None, 1 = VIP, 2 = Admin, 3 = Host / Owner.
  * Persistent access: the "mm_admins" dvar holds "guid:level,guid:level". Grants
@@ -48,11 +54,18 @@ mmCoreInit()
     // Every dvar the menu can change. Originals are backed up in mm_orig_* dvars
     // and restored here (covers map changes and fast restarts) and at game end.
     level.menuTrackedDvars = [];
-    level.menuTrackedDvars[0] = "jump_height";
-    level.menuTrackedDvars[1] = "bg_fallDamageMinHeight";
-    level.menuTrackedDvars[2] = "bg_fallDamageMaxHeight";
-    level.menuTrackedDvars[3] = level.menuGravityDvar;
+    level.menuTrackedDvars[0] = "bg_fallDamageMinHeight";
+    level.menuTrackedDvars[1] = "bg_fallDamageMaxHeight";
+    level.menuTrackedDvars[2] = level.menuGravityDvar;
+    if (isDefined(level.menuExtraTrackedDvars))
+    {
+        for (i = 0; i < level.menuExtraTrackedDvars.size; i++)
+            level.menuTrackedDvars[level.menuTrackedDvars.size] = level.menuExtraTrackedDvars[i];
+    }
     mmRestoreAllDvars();
+
+    if (!isDefined(level.menuEspMaxMarkers))
+        level.menuEspMaxMarkers = 12;
 
     level.menuServerToggles = [];
     level.menuServerToggles["superjump"] = false;
@@ -63,6 +76,16 @@ mmCoreInit()
 
     level.menuServerValues = [];
     level.menuServerValues["gravity"] = level.menuGravityDefault;
+
+    // Aimbot target bones, cycled by "Aim Target" in Combat Options.
+    level.menuAimBones = [];
+    level.menuAimBones[0] = "j_head";
+    level.menuAimBones[1] = "j_neck";
+    level.menuAimBones[2] = "j_spineupper";
+    level.menuAimBoneLabels = [];
+    level.menuAimBoneLabels[0] = "Head";
+    level.menuAimBoneLabels[1] = "Neck";
+    level.menuAimBoneLabels[2] = "Chest";
 
     mmRegisterToggles();
     mmInitStringTracking();
@@ -79,6 +102,17 @@ mmRegisterToggles()
     mmRegisterToggle("ufo", "UFO / Noclip", ::mmUfoOn, ::mmUfoOff, false);
     mmRegisterToggle("speed", "Speed Boost", ::mmSpeedOn, ::mmSpeedOff, true);
     mmRegisterToggle("thirdperson", "Third Person", ::mmThirdPersonOn, ::mmThirdPersonOff, true);
+
+    // Combat. The aimbot and ESP threads survive death, so no reapply is needed.
+    mmRegisterToggle("aimbot", "Aimbot", ::mmAimbotOn, ::mmAimbotOff, false);
+    mmRegisterToggle("aim_noads", "Aim Without ADS", ::mmNoop, ::mmNoop, false);
+    mmRegisterToggle("aim_walls", "Aim Through Walls", ::mmNoop, ::mmNoop, false);
+    mmRegisterToggle("esp", "Wallhack / ESP", ::mmEspOn, ::mmEspOff, false);
+}
+
+// For toggles that are only settings read by another feature's loop.
+mmNoop()
+{
 }
 
 // reapplyOnSpawn: call onFunc again after respawn (for effects the game resets on spawn).
@@ -139,6 +173,11 @@ mmInitPlayer()
     self.menu["values"] = [];
     self.menu["values"]["speed"] = 1.75;
     self.menu["values"]["ufospeed"] = 45;
+    self.menu["values"]["aimfov"] = 90;
+    self.menu["values"]["aimbone"] = 0;
+
+    // ESP markers keyed by the enemy's entity number.
+    self.menu["esp"] = [];
 
     self.menu["guid"] = "" + self getGuid();
 
@@ -179,6 +218,8 @@ mmWatchDeath()
     {
         self waittill("death");
 
+        self.menu["pendingWeapon"] = undefined;
+
         if (self.menu["isOpen"])
             self mmCloseMenu();
 
@@ -195,6 +236,7 @@ mmOnPlayerDisconnect()
         self.ufoOrigin delete();
 
     self mmDestroyHud();
+    self mmEspClear();
 }
 
 mmWatchGameEnd()
@@ -205,8 +247,23 @@ mmWatchGameEnd()
     for (i = 0; i < players.size; i++)
     {
         p = players[i];
-        if (isDefined(p) && isDefined(p.menu) && p.menu["isOpen"])
+        if (!isDefined(p) || !isDefined(p.menu))
+            continue;
+
+        if (p.menu["isOpen"])
             p mmCloseMenu();
+
+        if (p.menu["toggles"]["ufo"])
+            p mmSetToggle("ufo", false, true);
+
+        // The ESP loop ends with the game; don't leave frozen markers on screen.
+        p mmEspClear();
+    }
+
+    if (level.menuServerToggles["superjump"])
+    {
+        level.menuServerToggles["superjump"] = false;
+        game_setSuperJump(false);
     }
 
     mmRestoreAllDvars();
@@ -237,8 +294,14 @@ mmInputLoop()
 
         if (!self.menu["isOpen"])
         {
-            if (ads && meleePressed && self.menu["access"] > 0 && isAlive(self))
+            if (ads && meleePressed && self.menu["access"] > 0 && isAlive(self) && !self.menu["frozen"] && (!isDefined(self.sessionstate) || self.sessionstate == "playing"))
                 self mmOpenMenu();
+            continue;
+        }
+
+        if (!isAlive(self) || self.menu["frozen"] || (isDefined(self.sessionstate) && self.sessionstate != "playing"))
+        {
+            self mmCloseMenu();
             continue;
         }
 
@@ -325,6 +388,13 @@ mmBlockWeapons(reason, enabled)
     {
         self enableWeapons();
         self enableOffhandWeapons();
+        if (isDefined(self.menu["pendingWeapon"]))
+        {
+            weapon = self.menu["pendingWeapon"];
+            self.menu["pendingWeapon"] = undefined;
+            if (self hasWeapon(weapon))
+                self switchToWeapon(weapon);
+        }
     }
 }
 
@@ -366,6 +436,7 @@ mmGoTo(menuId, resetCursor)
     }
 
     self.menu["current"] = menuId;
+    self.menu["navigated"] = true;
 
     if (resetCursor)
     {
@@ -483,6 +554,8 @@ mmSelectCurrentOption()
     if (!isDefined(opt) || opt.type == "value" || !isDefined(opt.func))
         return;
 
+    self.menu["navigated"] = false;
+
     if (isDefined(opt.arg2))
         self [[opt.func]](opt.arg1, opt.arg2);
     else if (isDefined(opt.arg1))
@@ -491,7 +564,9 @@ mmSelectCurrentOption()
         self [[opt.func]]();
 
     // Labels (toggle states, access tags, player list) may have changed.
-    self mmRefresh();
+    // Skip when the action already navigated via mmGoTo() to avoid double-rendering.
+    if (!self.menu["navigated"])
+        self mmRefresh();
 }
 
 mmAdjustValue(direction)
@@ -500,7 +575,14 @@ mmAdjustValue(direction)
     if (!isDefined(opt) || opt.type != "value")
         return;
 
-    value = self mmGetOptionValue(opt) + (opt.step * direction);
+    oldVal = self mmGetOptionValue(opt);
+    value = oldVal + (opt.step * direction);
+    if (opt.isServer && opt.valueKey == "gravity")
+    {
+        defVal = level.menuGravityDefault;
+        if ((oldVal < defVal && value > defVal) || (oldVal > defVal && value < defVal))
+            value = defVal;
+    }
     if (value < opt.minVal)
         value = opt.minVal;
     if (value > opt.maxVal)
@@ -528,6 +610,7 @@ mmBuildMenus()
 
     self mmAddMenu("main", level.menuTitle, "none");
     self mmAddOption("main", "Self Options", ::mmOpenSubmenu, "self");
+    self mmAddOption("main", "Combat Options", ::mmOpenSubmenu, "combat");
     self mmAddOption("main", "Weapon Loadouts", ::mmOpenSubmenu, "weapons");
     if (access >= 2)
     {
@@ -544,6 +627,14 @@ mmBuildMenus()
     self mmAddValueOption("self", "Speed Multiplier", "speed", 1.0, 3.0, 0.25, false, ::mmApplySpeedValue);
     self mmAddValueOption("self", "UFO Speed", "ufospeed", 15, 150, 15, false, undefined);
     self mmAddOption("self", "Suicide", ::mmSuicide);
+
+    self mmAddMenu("combat", "Combat Options", "main");
+    self mmAddToggleOption("combat", "aimbot");
+    self mmAddOption("combat", "Aim Target: ^3" + level.menuAimBoneLabels[self.menu["values"]["aimbone"]], ::mmCycleAimBone);
+    self mmAddValueOption("combat", "Aim FOV", "aimfov", 15, 360, 15, false, undefined);
+    self mmAddToggleOption("combat", "aim_noads");
+    self mmAddToggleOption("combat", "aim_walls");
+    self mmAddToggleOption("combat", "esp");
 
     self mmAddMenu("weapons", "Weapon Loadouts", "main");
     self game_addWeaponOptions("weapons");
@@ -565,14 +656,14 @@ mmBuildMenus()
     for (i = 0; i < players.size; i++)
     {
         p = players[i];
-        if (!isDefined(p) || !isDefined(p.menu) || p == self)
+        if (!isDefined(p) || !isDefined(p.menu) || p == self || isDefined(p.menu["kicked"]))
             continue;
 
         self mmAddOption("players", p.name + " ^7[" + mmAccessLabel(p.menu["access"]) + "]", ::mmOpenPlayerActions, p);
     }
 
     target = self.menu["selectedPlayer"];
-    if (isDefined(target) && isDefined(target.menu))
+    if (isDefined(target) && isDefined(target.menu) && !isDefined(target.menu["kicked"]))
         self mmBuildPlayerActions(target);
 }
 
@@ -786,7 +877,6 @@ mmRender()
         }
         else
         {
-            mmSetText(rows[i], "");
             rows[i].alpha = 0;
         }
     }
@@ -854,6 +944,8 @@ mmInitStringTracking()
     if (!isDefined(level.menuStringLimit))
         level.menuStringLimit = 50;
 
+    level.menuNextFlush = level.menuStringLimit;
+
     if (!isDefined(level.menuOverflowFix))
         level.menuOverflowFix = true;
 }
@@ -890,7 +982,7 @@ mmSetText(elem, text)
     level.menuStrings[text] = true;
     level.menuStringCount++;
 
-    if (level.menuOverflowFix && !level.menuStringFlushing && level.menuStringCount >= level.menuStringLimit)
+    if (level.menuOverflowFix && !level.menuStringFlushing && level.menuStringCount >= level.menuNextFlush)
         level thread mmFlushStrings();
 }
 
@@ -911,6 +1003,13 @@ mmFlushStrings()
         if (isDefined(p) && isDefined(p.menu) && p.menu["isOpen"])
             p mmRedrawText();
     }
+
+    // If simultaneous open menus alone met the threshold, leave headroom before
+    // the next flush instead of flushing on every subsequent text write.
+    if (level.menuStringCount >= level.menuStringLimit)
+        level.menuNextFlush = level.menuStringCount + 10;
+    else
+        level.menuNextFlush = level.menuStringLimit;
 
     level.menuStringFlushing = false;
 }
@@ -983,12 +1082,12 @@ mmResetToggles()
 
 mmGodOn()
 {
-    self enableInvulnerability();
+    self game_setGodMode(true);
 }
 
 mmGodOff()
 {
-    self disableInvulnerability();
+    self game_setGodMode(false);
 }
 
 mmAmmoOn()
@@ -1010,11 +1109,16 @@ mmInfiniteAmmoLoop()
 
     for (;;)
     {
-        weapon = self getCurrentWeapon();
-        if (isDefined(weapon) && weapon != "none")
+        if (isAlive(self))
         {
-            self setWeaponAmmoClip(weapon, weaponClipSize(weapon));
-            self giveMaxAmmo(weapon);
+            weapon = self getCurrentWeapon();
+            if (isDefined(weapon) && weapon != "" && weapon != "none")
+            {
+                clip = weaponClipSize(weapon);
+                if (clip > 0)
+                    self setWeaponAmmoClip(weapon, clip);
+                self giveMaxAmmo(weapon);
+            }
         }
         wait 0.1;
     }
@@ -1079,7 +1183,7 @@ mmUfoLoop()
     {
         wait 0.05;
 
-        if (self.menu["isOpen"])
+        if (self.menu["isOpen"] || self.menu["frozen"])
             continue;
 
         speed = self.menu["values"]["ufospeed"];
@@ -1103,8 +1207,256 @@ mmSuicide()
 {
     self mmCloseMenu();
     if (self.menu["toggles"]["god"])
-        self disableInvulnerability();
+        self game_setGodMode(false);
     self suicide();
+}
+
+/* =========================
+ *  COMBAT
+ * ========================= */
+
+// Living opponent of self: other team in team modes, anyone else in FFA.
+mmIsEnemy(p)
+{
+    if (!isDefined(p) || p == self || !isDefined(p.pers) || !isAlive(p))
+        return false;
+    if (isDefined(p.sessionstate) && p.sessionstate != "playing")
+        return false;
+    if (isDefined(self.pers) && isDefined(self.pers["team"]) && self.pers["team"] == "spectator")
+        return false;
+    if (isDefined(p.pers["team"]) && p.pers["team"] == "spectator")
+        return false;
+    if (!isDefined(level.teamBased) || !level.teamBased)
+        return true;
+    if (!isDefined(self.pers) || !isDefined(self.pers["team"]) || !isDefined(p.pers["team"]))
+        return false;
+    return (p.pers["team"] != self.pers["team"]);
+}
+
+// Safely resolves a target bone with a fallback offset if the tag is not ready.
+mmGetTargetPos(player, bone, fallbackOffset)
+{
+    pos = player getTagOrigin(bone);
+    if (isDefined(pos))
+        return pos;
+    if (isDefined(player.origin))
+        return player.origin + (0, 0, fallbackOffset);
+    return undefined;
+}
+
+mmAimbotOn()
+{
+    self notify("mm_stop_aimbot");
+    self thread mmAimbotLoop();
+}
+
+mmAimbotOff()
+{
+    self notify("mm_stop_aimbot");
+}
+
+// Snaps the view to the best target while ADS is held (or always, with
+// "Aim Without ADS"). Paused while the menu is open, frozen, in UFO mode, or dead.
+mmAimbotLoop()
+{
+    self endon("disconnect");
+    self endon("mm_stop_aimbot");
+    level endon("game_ended");
+
+    for (;;)
+    {
+        wait 0.05;
+
+        if (!isAlive(self) || self.menu["isOpen"] || self.menu["toggles"]["ufo"] || self.menu["frozen"])
+            continue;
+        if (!self.menu["toggles"]["aim_noads"] && !self adsButtonPressed())
+            continue;
+
+        eye = self getEye();
+        aimPos = self mmFindAimTarget(eye);
+        if (isDefined(aimPos))
+            self setPlayerAngles(vectorToAngles(aimPos - eye));
+    }
+}
+
+// Returns the aim bone position of the enemy closest to the crosshair (by
+// angle) inside the FOV cone, or undefined. Skips enemies behind walls unless
+// "Aim Through Walls" is on.
+mmFindAimTarget(eye)
+{
+    forward = anglesToForward(self getPlayerAngles());
+    bone = level.menuAimBones[self.menu["values"]["aimbone"]];
+    throughWalls = self.menu["toggles"]["aim_walls"];
+
+    bestPos = undefined;
+    fov = self.menu["values"]["aimfov"];
+    if (fov >= 360)
+        bestDot = -2;
+    else
+        bestDot = cos(fov * 0.5);
+
+    players = level.players;
+    for (i = 0; i < players.size; i++)
+    {
+        p = players[i];
+        if (!self mmIsEnemy(p))
+            continue;
+
+        pos = mmGetTargetPos(p, bone, 50);
+        if (!isDefined(pos) || distanceSquared(eye, pos) < 1)
+            continue;
+
+        dot = vectorDot(forward, vectorNormalize(pos - eye));
+        if (dot < bestDot)
+            continue;
+        if (!throughWalls && !bulletTracePassed(eye, pos, false, self))
+            continue;
+
+        bestPos = pos;
+        bestDot = dot;
+    }
+
+    return bestPos;
+}
+
+mmCycleAimBone()
+{
+    next = self.menu["values"]["aimbone"] + 1;
+    if (next >= level.menuAimBones.size)
+        next = 0;
+    self.menu["values"]["aimbone"] = next;
+}
+
+mmEspOn()
+{
+    self notify("mm_stop_esp");
+    self thread mmEspLoop();
+}
+
+mmEspOff()
+{
+    self notify("mm_stop_esp");
+    self mmEspClear();
+}
+
+// One client-only waypoint per living enemy (capped at level.menuEspMaxMarkers
+// to stay under the per-client HUD limit), drawn through walls and moved to the
+// enemy's head every frame. Markers for enemies that died or left are freed.
+mmEspLoop()
+{
+    self endon("disconnect");
+    self endon("mm_stop_esp");
+    level endon("game_ended");
+
+    for (;;)
+    {
+        enemies = [];
+        players = level.players;
+        for (i = 0; i < players.size; i++)
+        {
+            p = players[i];
+            if (self mmIsEnemy(p))
+                enemies[enemies.size] = p;
+        }
+
+        // In large FFA lobbies, show markers for the closest living enemies so we
+        // stay within the per-client HUD element budget.
+        maxMarkers = level.menuEspMaxMarkers;
+        if (enemies.size > maxMarkers && isDefined(self.origin))
+        {
+            for (i = 0; i < maxMarkers; i++)
+            {
+                bestIdx = i;
+                bestDist = distanceSquared(self.origin, enemies[i].origin);
+                for (j = i + 1; j < enemies.size; j++)
+                {
+                    d = distanceSquared(self.origin, enemies[j].origin);
+                    if (d < bestDist)
+                    {
+                        bestDist = d;
+                        bestIdx = j;
+                    }
+                }
+                if (bestIdx != i)
+                {
+                    tmp = enemies[i];
+                    enemies[i] = enemies[bestIdx];
+                    enemies[bestIdx] = tmp;
+                }
+            }
+        }
+
+        limit = enemies.size;
+        if (limit > maxMarkers)
+            limit = maxMarkers;
+
+        active = [];
+        for (i = 0; i < limit; i++)
+        {
+            p = enemies[i];
+            head = mmGetTargetPos(p, "j_head", 60);
+            if (!isDefined(head))
+                continue;
+
+            key = p getEntityNumber();
+            marker = self.menu["esp"][key];
+            if (!isDefined(marker))
+            {
+                marker = self mmCreateEspMarker();
+                if (!isDefined(marker))
+                    continue;
+                self.menu["esp"][key] = marker;
+            }
+
+            active[key] = true;
+            pos = head + (0, 0, 14);
+            marker.x = pos[0];
+            marker.y = pos[1];
+            marker.z = pos[2];
+        }
+
+        keys = getArrayKeys(self.menu["esp"]);
+        for (i = 0; i < keys.size; i++)
+        {
+            if (isDefined(active[keys[i]]))
+                continue;
+            if (isDefined(self.menu["esp"][keys[i]]))
+                self.menu["esp"][keys[i]] destroy();
+            self.menu["esp"][keys[i]] = undefined;
+        }
+
+        wait 0.05;
+    }
+}
+
+// Raw newClientHudElem (not _hud_util), so it is freed with destroy().
+mmCreateEspMarker()
+{
+    marker = newClientHudElem(self);
+    if (!isDefined(marker))
+        return undefined;
+
+    marker.color = (1, 0.15, 0.15);
+    marker.alpha = 0.85;
+    marker.archived = false;
+    marker.hideWhenInMenu = true;
+    marker setShader("white", 6, 6);
+    marker game_setupEspWaypoint();
+    return marker;
+}
+
+mmEspClear()
+{
+    if (!isDefined(self.menu) || !isDefined(self.menu["esp"]))
+        return;
+
+    keys = getArrayKeys(self.menu["esp"]);
+    for (i = 0; i < keys.size; i++)
+    {
+        if (isDefined(self.menu["esp"][keys[i]]))
+            self.menu["esp"][keys[i]] destroy();
+    }
+    self.menu["esp"] = [];
 }
 
 /* =========================
@@ -1114,17 +1466,22 @@ mmSuicide()
 mmGiveWeapon(weaponName)
 {
     self giveWeapon(weaponName);
-    self switchToWeapon(weaponName);
     self giveMaxAmmo(weaponName);
+    if (self.menu["weaponsBlocked"])
+        self.menu["pendingWeapon"] = weaponName;
+    else
+        self switchToWeapon(weaponName);
     self iprintln("Gave weapon: ^5" + weaponName);
 }
 
 mmRefillAmmo()
 {
-    weapons = self getWeaponsListPrimaries();
+    weapons = self getWeaponsListAll();
     for (i = 0; i < weapons.size; i++)
     {
-        self setWeaponAmmoClip(weapons[i], weaponClipSize(weapons[i]));
+        clip = weaponClipSize(weapons[i]);
+        if (clip > 0)
+            self setWeaponAmmoClip(weapons[i], clip);
         self giveMaxAmmo(weapons[i]);
     }
     self iprintln("All weapon ammo refilled.");
@@ -1132,6 +1489,7 @@ mmRefillAmmo()
 
 mmTakeAllWeapons()
 {
+    self.menu["pendingWeapon"] = undefined;
     self takeAllWeapons();
     self iprintln("Removed all weapons.");
 }
@@ -1141,11 +1499,12 @@ mmTakeAllWeapons()
  * ========================= */
 
 // Backs up the dvar's original value (once) before changing it.
+// Values are prefixed with "v:" so an originally empty dvar is distinct from no backup.
 mmOverrideDvar(dvar, value)
 {
     backup = "mm_orig_" + dvar;
     if (getDvar(backup) == "")
-        setDvar(backup, getDvar(dvar));
+        setDvar(backup, "v:" + getDvar(dvar));
     setDvar(dvar, value);
 }
 
@@ -1155,6 +1514,9 @@ mmRestoreDvar(dvar)
     orig = getDvar(backup);
     if (orig == "")
         return;
+
+    if (orig.size >= 2 && getSubStr(orig, 0, 2) == "v:")
+        orig = getSubStr(orig, 2);
 
     setDvar(dvar, orig);
     setDvar(backup, "");
@@ -1171,18 +1533,7 @@ mmToggleSuperJump()
     state = !level.menuServerToggles["superjump"];
     level.menuServerToggles["superjump"] = state;
 
-    if (state)
-    {
-        mmOverrideDvar("jump_height", "250");
-        mmOverrideDvar("bg_fallDamageMinHeight", "9999");
-        mmOverrideDvar("bg_fallDamageMaxHeight", "9999");
-    }
-    else
-    {
-        mmRestoreDvar("jump_height");
-        mmRestoreDvar("bg_fallDamageMinHeight");
-        mmRestoreDvar("bg_fallDamageMaxHeight");
-    }
+    game_setSuperJump(state);
 
     iprintln("Super Jump: " + mmOnOff(state));
 }
@@ -1205,7 +1556,7 @@ mmSpawnBot()
 
 mmIsBot()
 {
-    return (isDefined(self.pers["isBot"]) && self.pers["isBot"]);
+    return (isDefined(self.pers) && isDefined(self.pers["isBot"]) && self.pers["isBot"]);
 }
 
 mmKickAllBots()
@@ -1327,7 +1678,7 @@ mmLoadSavedAccess()
     if (guid == "" || guid == "0")
         return 0;
 
-    entries = strTok(getDvar("mm_admins"), ",");
+    entries = strTok(getDvar("mm_admins"), ", ");
     for (i = 0; i < entries.size; i++)
     {
         parts = strTok(entries[i], ":");
@@ -1351,7 +1702,7 @@ mmSaveAccess()
     if (guid == "" || guid == "0" || self mmIsBot())
         return;
 
-    entries = strTok(getDvar("mm_admins"), ",");
+    entries = strTok(getDvar("mm_admins"), ", ");
     out = "";
     for (i = 0; i < entries.size; i++)
     {
@@ -1390,6 +1741,15 @@ mmToggleTargetFreeze(target)
 
     state = !target.menu["frozen"];
     target.menu["frozen"] = state;
+
+    if (state)
+    {
+        if (target.menu["isOpen"])
+            target mmCloseMenu();
+        if (target.menu["toggles"]["ufo"])
+            target mmSetToggle("ufo", false, true);
+    }
+
     target freezeControls(state);
 
     if (state)
@@ -1411,7 +1771,7 @@ mmKillTarget(target)
     }
 
     if (target.menu["toggles"]["god"])
-        target disableInvulnerability();
+        target game_setGodMode(false);
     target suicide();
     self iprintln("Killed ^5" + target.name);
 }
@@ -1422,6 +1782,7 @@ mmKickTarget(target)
         return;
 
     name = target.name;
+    target.menu["kicked"] = true;
     self.menu["selectedPlayer"] = undefined;
     kick(target getEntityNumber());
     self iprintln("Kicked ^5" + name);

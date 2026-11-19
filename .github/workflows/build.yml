@@ -12,14 +12,18 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GSC_TOOL_VERSION: "1.6.2"
+      GSC_TOOL_SHA256: "ccd9f5062eccb26fe798f9a4d89bef71c019602aa2b90a4edd67011e2dcaf0b8"
     steps:
       - uses: actions/checkout@v4
 
       - name: Install gsc-tool
         run: |
           mkdir -p "$RUNNER_TEMP/gsc-tool"
-          curl -fsSL "https://github.com/xensik/gsc-tool/releases/download/${GSC_TOOL_VERSION}/linux-amd64-release.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP/gsc-tool"
+          archive="$RUNNER_TEMP/gsc-tool/linux-amd64-release.tar.gz"
+          curl -fsSL "https://github.com/xensik/gsc-tool/releases/download/${GSC_TOOL_VERSION}/linux-amd64-release.tar.gz" -o "$archive"
+          echo "${GSC_TOOL_SHA256}  ${archive}" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP/gsc-tool"
+          rm -f "$archive"
           chmod +x "$RUNNER_TEMP/gsc-tool/gsc-tool"
           echo "GSC_TOOL=$RUNNER_TEMP/gsc-tool/gsc-tool" >> "$GITHUB_ENV"
 

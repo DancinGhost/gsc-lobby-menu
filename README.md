@@ -2,8 +2,8 @@
 
 Server-side / host-side GSC lobby administration menu framework for self-hosted custom servers and private matches (compatible with Plutonium):
 
-- **`t6` MP** (Call of Duty: Black Ops II Multiplayer)
-- **`iw5` MP** (Call of Duty: Modern Warfare 3 Multiplayer)
+- **`t6` MP** (CoD: BO2 Multiplayer)
+- **`iw5` MP** (CoD: MW3 Multiplayer)
 
 > **Notice:** This is an unofficial, host-side / custom-server GSC scripting project for private matches and self-hosted servers only. No copyrighted game files or assets are included, and this project is not affiliated with Activision Publishing, Inc., Treyarch, Infinity Ward, or the Plutonium Project. See [Legal & Disclaimer](#legal--disclaimer).
 
@@ -14,11 +14,11 @@ Server-side / host-side GSC lobby administration menu framework for self-hosted 
 ### Option A: Drop-in download (easiest)
 
 1. Download the ready-to-use `.gsc` file for your game from the [latest Release](https://github.com/DancinGhost/gsc-lobby-menu/releases/latest):
-   - **Black Ops II (`t6`)**: `lobbymenu_t6_mp.gsc`
-   - **Modern Warfare 3 (`iw5`)**: `lobbymenu_iw5_mp.gsc`
+   - **BO2 (`t6`)**: `lobbymenu_t6_mp.gsc`
+   - **MW3 (`iw5`)**: `lobbymenu_iw5_mp.gsc`
 2. Drop it into your Plutonium scripts folder (create `scripts\mp` if needed):
-   - **Black Ops II (`t6`)**: `%LOCALAPPDATA%\Plutonium\storage\t6\scripts\mp\`
-   - **Modern Warfare 3 (`iw5`)**: `%LOCALAPPDATA%\Plutonium\storage\iw5\scripts\mp\`
+   - **BO2 (`t6`)**: `%LOCALAPPDATA%\Plutonium\storage\t6\scripts\mp\`
+   - **MW3 (`iw5`)**: `%LOCALAPPDATA%\Plutonium\storage\iw5\scripts\mp\`
 3. Start a private match or custom server (or run `map_restart` in the `~` console if already in a match).
 4. Once spawned, press **`ADS` + `Melee`** to open the menu. Use **D-Pad** to navigate/adjust, **`Use`** to select, and **`Melee`** to go back/close.
 
@@ -120,8 +120,8 @@ T6 compiles standalone without external include files. For IW5, `--compile` runs
 
 After running `.\scripts\build.ps1` or `./scripts/build.sh`, copy the assembled script from `build/` (not `src/`):
 
-- **Black Ops II (`t6`)**: `build/t6/mp/lobbymenu_t6_mp.gsc` → `%LOCALAPPDATA%\Plutonium\storage\t6\scripts\mp\`
-- **Modern Warfare 3 (`iw5`)**: `build/iw5/mp/lobbymenu_iw5_mp.gsc` → `%LOCALAPPDATA%\Plutonium\storage\iw5\scripts\mp\`
+- **BO2 (`t6`)**: `build/t6/mp/lobbymenu_t6_mp.gsc` → `%LOCALAPPDATA%\Plutonium\storage\t6\scripts\mp\`
+- **MW3 (`iw5`)**: `build/iw5/mp/lobbymenu_iw5_mp.gsc` → `%LOCALAPPDATA%\Plutonium\storage\iw5\scripts\mp\`
 
 In-game, run `map_restart` in the console (`~`) to reload scripts.
 
@@ -149,7 +149,9 @@ Create `src/<game>/<mode>/lobbymenu_<game>_<mode>.gsc` with the game's `#include
 | :--- | :--- |
 | `game_onPlayerConnect()` | Per-player setup at connect (e.g. `notifyOnPlayerCommand` binds) |
 | `game_readDirection()` | Returns `"up"`, `"down"`, `"left"`, `"right"` or `undefined` |
+| `game_setGodMode(enabled)` | Game-specific invulnerability toggle on `self` |
 | `game_setThirdPerson(enabled)` | Game-specific third-person switch |
+| `game_setSuperJump(enabled)` | Game-specific lobby super jump toggle |
 | `game_addWeaponOptions(menuId)` | Adds weapon entries with `mmAddOption()` |
 | `game_spawnBot()` | Adds a bot that joins a team; returns `true` on success |
 

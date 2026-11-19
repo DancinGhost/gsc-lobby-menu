@@ -21,6 +21,8 @@ init()
     level.menuTitle = "^5Custom Lobby ^7Menu (IW5)";
     level.menuDirectionIsPolled = false;
     level.menuGravityDvar = "g_gravity";
+    level.menuExtraTrackedDvars = [];
+    level.menuExtraTrackedDvars[0] = "jump_height";
 
     mmCoreInit();
 }
@@ -62,6 +64,53 @@ game_readDirection()
     return dir;
 }
 
+// Native IW5 MP god mode via maxhealth/health + damage top-up, avoiding
+// T6-only enableInvulnerability(). Preserves the player's normal maxhealth
+// (e.g. 100 in core, 30 in hardcore) for clean disable.
+game_setGodMode(enabled)
+{
+    self notify("mm_stop_iw5_god");
+
+    if (enabled)
+    {
+        if (!isDefined(self.mmOrigMaxHealth))
+        {
+            if (isDefined(self.maxhealth) && self.maxhealth > 0 && self.maxhealth < 999999)
+                self.mmOrigMaxHealth = self.maxhealth;
+            else
+                self.mmOrigMaxHealth = 100;
+        }
+        self.maxhealth = 999999;
+        self.health = self.maxhealth;
+        self thread iw5GodLoop();
+    }
+    else
+    {
+        orig = 100;
+        if (isDefined(self.mmOrigMaxHealth))
+            orig = self.mmOrigMaxHealth;
+        self.maxhealth = orig;
+        if (isDefined(self.health) && self.health > orig)
+            self.health = orig;
+        self.mmOrigMaxHealth = undefined;
+    }
+}
+
+iw5GodLoop()
+{
+    self endon("disconnect");
+    self endon("death");
+    self endon("mm_stop_iw5_god");
+    level endon("game_ended");
+
+    for (;;)
+    {
+        self waittill("damage");
+        if (isAlive(self))
+            self.health = self.maxhealth;
+    }
+}
+
 // Stock IW5 resets cg_thirdPerson on spawn; the core re-applies this after respawn.
 game_setThirdPerson(enabled)
 {
@@ -71,10 +120,26 @@ game_setThirdPerson(enabled)
         self setClientDvar("cg_thirdPerson", "0");
 }
 
+game_setSuperJump(enabled)
+{
+    if (enabled)
+    {
+        mmOverrideDvar("jump_height", "250");
+        mmOverrideDvar("bg_fallDamageMinHeight", "9998");
+        mmOverrideDvar("bg_fallDamageMaxHeight", "9999");
+    }
+    else
+    {
+        mmRestoreDvar("jump_height");
+        mmRestoreDvar("bg_fallDamageMinHeight");
+        mmRestoreDvar("bg_fallDamageMaxHeight");
+    }
+}
+
 game_addWeaponOptions(menuId)
 {
-    self mmAddOption(menuId, "Give MSR", ::mmGiveWeapon, "iw5_msr_mp");
-    self mmAddOption(menuId, "Give L118A", ::mmGiveWeapon, "iw5_l96a1_mp");
+    self mmAddOption(menuId, "Give MSR", ::mmGiveWeapon, "iw5_msr_mp_msrscope");
+    self mmAddOption(menuId, "Give L118A", ::mmGiveWeapon, "iw5_l96a1_mp_l96a1scope");
     self mmAddOption(menuId, "Give ACR 6.8", ::mmGiveWeapon, "iw5_acr_mp");
     self mmAddOption(menuId, "Give MP7", ::mmGiveWeapon, "iw5_mp7_mp");
     self mmAddOption(menuId, "Give Desert Eagle", ::mmGiveWeapon, "iw5_deserteagle_mp");
@@ -91,17 +156,27 @@ game_spawnBot()
     return true;
 }
 
+// IW5: setWaypoint(constantSize, pinToScreenEdge).
+game_setupEspWaypoint()
+{
+    self setWaypoint(true, true);
+}
+
 // Test clients don't pick a team or class on their own; auto-assign a team,
 // then select a default class.
 iw5BotJoin()
 {
     self endon("disconnect");
+    level endon("game_ended");
 
-    while (!isDefined(self.pers["team"]))
+    while (!isDefined(self.pers) || !isDefined(self.pers["team"]))
         wait 0.05;
 
     self notify("menuresponse", game["menu_team"], "autoassign");
     wait 0.5;
+
+    if (!isDefined(level.classmap))
+        return;
 
     classes = getArrayKeys(level.classmap);
     for (i = 0; i < classes.size; i++)

@@ -24,13 +24,20 @@ param(
     [string]$GscToolPath = "gsc-tool.exe",
     [string]$Iw5IncludeDir = $env:IW5_INCLUDE_DIR,
     [switch]$InstallToPlutonium,
-    [string]$PlutoniumStorage = (Join-Path $env:LOCALAPPDATA "Plutonium\storage")
+    [string]$PlutoniumStorage = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $BuildRoot = Join-Path $RepoRoot "build"
+
+if ($InstallToPlutonium -and -not $PlutoniumStorage) {
+    if (-not $env:LOCALAPPDATA) {
+        throw "Could not determine default Plutonium storage path (LOCALAPPDATA is unset). Pass -PlutoniumStorage."
+    }
+    $PlutoniumStorage = Join-Path $env:LOCALAPPDATA "Plutonium\storage"
+}
 
 if ($Compile) {
     $GscToolCmd = Get-Command $GscToolPath -ErrorAction SilentlyContinue

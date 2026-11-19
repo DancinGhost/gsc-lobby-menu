@@ -42,6 +42,14 @@ game_readDirection()
     return undefined;
 }
 
+game_setGodMode(enabled)
+{
+    if (enabled)
+        self enableInvulnerability();
+    else
+        self disableInvulnerability();
+}
+
 // cg_thirdPerson is cheat-protected on T6; the stock scripts use this instead.
 game_setThirdPerson(enabled)
 {
@@ -49,6 +57,67 @@ game_setThirdPerson(enabled)
         self setClientThirdPerson(1);
     else
         self setClientThirdPerson(0);
+}
+
+// T6 MP has no jump_height dvar, so boost upward velocity on takeoff and
+// raise the fall damage thresholds while Super Jump is active.
+game_setSuperJump(enabled)
+{
+    level notify("mm_stop_t6_superjump");
+
+    if (enabled)
+    {
+        mmOverrideDvar("bg_fallDamageMinHeight", "9998");
+        mmOverrideDvar("bg_fallDamageMaxHeight", "9999");
+        level thread t6SuperJumpLoop();
+    }
+    else
+    {
+        mmRestoreDvar("bg_fallDamageMinHeight");
+        mmRestoreDvar("bg_fallDamageMaxHeight");
+    }
+}
+
+t6SuperJumpLoop()
+{
+    level endon("game_ended");
+    level endon("mm_stop_t6_superjump");
+
+    for (;;)
+    {
+        players = level.players;
+        for (i = 0; i < players.size; i++)
+        {
+            p = players[i];
+            if (!isDefined(p) || !isAlive(p))
+                continue;
+            if (isDefined(p.menu) && (p.menu["toggles"]["ufo"] || p.menu["frozen"]))
+                continue;
+
+            if (!isDefined(p.mmCanSuperJump))
+                p.mmCanSuperJump = true;
+            if (!isDefined(p.mmJumpCooldown))
+                p.mmJumpCooldown = 0;
+
+            if (p.mmJumpCooldown > 0)
+                p.mmJumpCooldown--;
+
+            onGround = p isOnGround();
+            pressingJump = p jumpButtonPressed();
+
+            if (onGround && p.mmJumpCooldown == 0 && !pressingJump)
+                p.mmCanSuperJump = true;
+
+            if (p.mmCanSuperJump && pressingJump)
+            {
+                vel = p getVelocity();
+                p setVelocity((vel[0], vel[1], 560));
+                p.mmCanSuperJump = false;
+                p.mmJumpCooldown = 5;
+            }
+        }
+        wait 0.05;
+    }
 }
 
 game_addWeaponOptions(menuId)
@@ -64,4 +133,11 @@ game_addWeaponOptions(menuId)
 game_spawnBot()
 {
     return maps\mp\bots\_bot::spawn_bot("autoassign");
+}
+
+// T6: setWaypoint(constantSize, offscreenMaterial). The offscreen material
+// keeps a marker at the screen edge when the enemy is out of view.
+game_setupEspWaypoint()
+{
+    self setWaypoint(true, "white");
 }
