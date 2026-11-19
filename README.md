@@ -11,9 +11,22 @@ Server-side / host-side GSC lobby administration menu framework for self-hosted 
 
 ## Quickstart
 
-> **Important:** Do **not** copy files from `src/` directly into Plutonium. The files in `src/<game>/mp/` are incomplete entry stubs without `src/common/menu_core.gsc` and will fail with `Unresolved external : "mmcoreinit"` / `"mmgiveweapon"` errors. Always run the build script first and install the assembled file from `build/`.
+### Option A: Drop-in download (easiest)
 
-### 1. Clone, build, and install
+1. Download the ready-to-use `.gsc` file for your game from the [latest Release](https://github.com/DancinGhost/gsc-lobby-menu/releases/latest):
+   - **Black Ops II (`t6`)**: `lobbymenu_t6_mp.gsc`
+   - **Modern Warfare 3 (`iw5`)**: `lobbymenu_iw5_mp.gsc`
+2. Drop it into your Plutonium scripts folder (create `scripts\mp` if needed):
+   - **Black Ops II (`t6`)**: `%LOCALAPPDATA%\Plutonium\storage\t6\scripts\mp\`
+   - **Modern Warfare 3 (`iw5`)**: `%LOCALAPPDATA%\Plutonium\storage\iw5\scripts\mp\`
+3. Start a private match or custom server (or run `map_restart` in the `~` console if already in a match).
+4. Once spawned, press **`ADS` + `Melee`** to open the menu. Use **D-Pad** to navigate/adjust, **`Use`** to select, and **`Melee`** to go back/close.
+
+The match host gets `Host` access automatically. On dedicated servers, preset `mm_admins` in your server config (see [Server configuration](#server-configuration)).
+
+### Option B: Build from source
+
+> **Important:** Do **not** copy files from `src/` directly into Plutonium. The files in `src/<game>/mp/` are incomplete entry stubs without `src/common/menu_core.gsc` and will fail with `Unresolved external : "mmcoreinit"` / `"mmgiveweapon"` errors. Always run the build script first and install the assembled file from `build/`.
 
 **Windows (PowerShell):**
 
@@ -34,13 +47,6 @@ cd gsc-lobby-menu
 ```
 
 *(Pass `--storage "/path/to/Plutonium/storage"` if Plutonium is not in your default Wine prefix.)*
-
-### 2. Launch and open the menu
-
-1. Start a private match or custom server in Plutonium (or run `map_restart` in the `~` console if already in a match).
-2. Once spawned, press **`ADS` + `Melee`** to open the menu. Use **D-Pad** to navigate/adjust, **`Use`** to select, and **`Melee`** to go back/close.
-
-The match host gets `Host` access automatically. On dedicated servers, preset `mm_admins` in your server config (see [Server configuration](#server-configuration)).
 
 ## Features
 
@@ -77,7 +83,7 @@ src/
 scripts/
 ├── build.sh                   # Linux/macOS build / compile / install
 └── build.ps1                  # Windows build / compile / install
-.github/workflows/build.yml    # CI: assembles and validates both games on every push
+.github/workflows/build.yml    # CI: validates builds on push/PR and publishes Releases on v* tags
 ```
 
 The entry files are **not** loadable on their own. The build appends `src/common/*.gsc` to each entry file and writes one self-contained script per game to `build/<game>/mp/lobbymenu_<game>_mp.gsc`.
@@ -118,6 +124,15 @@ After running `.\scripts\build.ps1` or `./scripts/build.sh`, copy the assembled 
 - **Modern Warfare 3 (`iw5`)**: `build/iw5/mp/lobbymenu_iw5_mp.gsc` → `%LOCALAPPDATA%\Plutonium\storage\iw5\scripts\mp\`
 
 In-game, run `map_restart` in the console (`~`) to reload scripts.
+
+### Publishing a release
+
+Pushing a version tag matching `v*` triggers GitHub Actions to assemble, validate with `gsc-tool`, and publish a GitHub Release with `lobbymenu_t6_mp.gsc`, `lobbymenu_iw5_mp.gsc`, and `SHA256SUMS.txt` attached:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
 
 ## Server configuration
 

@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -27,3 +30,56 @@ jobs:
         with:
           name: gsc-lobby-menu-build
           path: build/
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: gsc-lobby-menu-build
+          path: build/
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          cp build/t6/mp/lobbymenu_t6_mp.gsc release-assets/
+          cp build/iw5/mp/lobbymenu_iw5_mp.gsc release-assets/
+          (cd release-assets && sha256sum lobbymenu_t6_mp.gsc lobbymenu_iw5_mp.gsc > SHA256SUMS.txt)
+
+          cat <<'EOF' > release-notes.md
+          ### Drop-in install (Plutonium)
+
+          Download the ready-to-use `.gsc` file for your game below and place it in:
+
+          - **Black Ops II (`t6`)**: `%LOCALAPPDATA%\Plutonium\storage\t6\scripts\mp\lobbymenu_t6_mp.gsc`
+          - **Modern Warfare 3 (`iw5`)**: `%LOCALAPPDATA%\Plutonium\storage\iw5\scripts\mp\lobbymenu_iw5_mp.gsc`
+
+          Then start a private match or custom server (or run `map_restart` in the `~` console) and press **ADS + Melee** to open the menu.
+          EOF
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              release-assets/lobbymenu_t6_mp.gsc \
+              release-assets/lobbymenu_iw5_mp.gsc \
+              release-assets/SHA256SUMS.txt \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$TAG" \
+              release-assets/lobbymenu_t6_mp.gsc \
+              release-assets/lobbymenu_iw5_mp.gsc \
+              release-assets/SHA256SUMS.txt \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" \
+              --notes-file release-notes.md \
+              --generate-notes
+          fi
