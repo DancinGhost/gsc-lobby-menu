@@ -1,0 +1,16 @@
+# Compiled GSC binaries and build output
+build/
+dist/
+*.gscbin
+*.gscasm
+
+# Compiler tools if placed locally
+tools/
+gsc-tool*
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/

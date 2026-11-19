@@ -1,0 +1,29 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      GSC_TOOL_VERSION: "1.6.2"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install gsc-tool
+        run: |
+          mkdir -p "$RUNNER_TEMP/gsc-tool"
+          curl -fsSL "https://github.com/xensik/gsc-tool/releases/download/${GSC_TOOL_VERSION}/linux-amd64-release.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/gsc-tool"
+          chmod +x "$RUNNER_TEMP/gsc-tool/gsc-tool"
+          echo "GSC_TOOL=$RUNNER_TEMP/gsc-tool/gsc-tool" >> "$GITHUB_ENV"
+
+      - name: Assemble and validate
+        run: ./scripts/build.sh all --compile
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gsc-lobby-menu-build
+          path: build/
