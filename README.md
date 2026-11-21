@@ -9,6 +9,12 @@ Server-side / host-side GSC lobby administration menu framework for self-hosted 
 
 > **Targets:** `t6/zm` and `t4` targets are not implemented yet. A new target only needs an entry file with the game hooks (see [Adding a game](#adding-a-game)).
 
+## Preview
+
+<p align="center">
+  <img src="assets/t6-menu-preview.png" alt="Custom Lobby Menu (T6) in-game preview" width="420" />
+</p>
+
 ## Quickstart
 
 ### Option A: Drop-in download (easiest)
